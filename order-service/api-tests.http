@@ -1,0 +1,72 @@
+### Create Order (first time)
+POST http://localhost:8080/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: test-key-001
+X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+
+{
+  "items": [
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440001",
+      "name": "Margherita Pizza",
+      "quantity": 2,
+      "unitPrice": 12.99
+    },
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440002",
+      "name": "Garlic Bread",
+      "quantity": 1,
+      "unitPrice": 3.49
+    }
+  ]
+}
+
+### Duplicate (same Idempotency-Key) — should return same response
+POST http://localhost:8080/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: test-key-001
+X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+
+{
+  "items": [
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440001",
+      "name": "Margherita Pizza",
+      "quantity": 2,
+      "unitPrice": 12.99
+    }
+  ]
+}
+
+### Confirm the order (replace ORDER_ID with actual UUID from create)
+PATCH http://localhost:8080/api/v1/orders/ORDER_ID/status
+Content-Type: application/json
+X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+
+{ "newStatus": "CONFIRMED" }
+
+### Try invalid transition (CONFIRMED → DELIVERED, skipping PREPARING)
+PATCH http://localhost:8080/api/v1/orders/ORDER_ID/status
+Content-Type: application/json
+X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+
+{ "newStatus": "DELIVERED" }
+
+### Cancel order
+PATCH http://localhost:8080/api/v1/orders/ORDER_ID/status
+Content-Type: application/json
+X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+
+{ "newStatus": "CANCELLED" }
+
+### Get order (correct customer)
+GET http://localhost:8080/api/v1/orders/ORDER_ID
+X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+
+### Get order (wrong customer — expect 403)
+GET http://localhost:8080/api/v1/orders/ORDER_ID
+X-Customer-Id: 770e8400-e29b-41d4-a716-000000000000
+
+### List orders with filters
+GET http://localhost:8080/api/v1/orders?customerId=550e8400-e29b-41d4-a716-446655440000&page=0&size=10
+X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
