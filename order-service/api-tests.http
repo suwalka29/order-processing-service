@@ -1,8 +1,21 @@
-### Create Order (first time)
-POST http://localhost:8080/api/v1/orders
+# Order Processing Service — API Test Suite
+# VS Code REST Client extension required (humao.rest-client)
+# Replace ORDER_ID placeholder with actual UUID returned from Create Order
+
+@baseUrl = http://localhost:8080
+@customerId = 550e8400-e29b-41d4-a716-446655440000
+@wrongCustomerId = 770e8400-e29b-41d4-a716-000000000000
+
+###############################################################################
+# SECTION 1 — ORDER CREATION
+###############################################################################
+
+### 1.1 Create Order (new — should return 201 Created)
+# @name createOrder
+POST {{baseUrl}}/api/v1/orders
 Content-Type: application/json
 Idempotency-Key: test-key-001
-X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+X-Customer-Id: {{customerId}}
 
 {
   "items": [
@@ -21,11 +34,16 @@ X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
   ]
 }
 
-### Duplicate (same Idempotency-Key) — should return same response
-POST http://localhost:8080/api/v1/orders
+# Expected: 201 Created
+# Response contains: id (UUID), status: "PENDING", totalAmount: 29.47, items array
+
+---
+
+### 1.2 Idempotency — same Idempotency-Key, same body (should return same response)
+POST {{baseUrl}}/api/v1/orders
 Content-Type: application/json
 Idempotency-Key: test-key-001
-X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+X-Customer-Id: {{customerId}}
 
 {
   "items": [
@@ -34,39 +52,438 @@ X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
       "name": "Margherita Pizza",
       "quantity": 2,
       "unitPrice": 12.99
+    },
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440002",
+      "name": "Garlic Bread",
+      "quantity": 1,
+      "unitPrice": 3.49
     }
   ]
 }
 
-### Confirm the order (replace ORDER_ID with actual UUID from create)
-PATCH http://localhost:8080/api/v1/orders/ORDER_ID/status
+# Expected: 201 Created (same status code as original)
+# Response: IDENTICAL to 1.1 — same order UUID, same totalAmount
+# Proof: no duplicate order created; idempotency_keys table has exactly 1 row for this key
+
+---
+
+### 1.3 Idempotency — same key, DIFFERENT body (should still return original response)
+POST {{baseUrl}}/api/v1/orders
 Content-Type: application/json
-X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+Idempotency-Key: test-key-001
+X-Customer-Id: {{customerId}}
+
+{
+  "items": [
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440099",
+      "name": "Completely Different Item",
+      "quantity": 99,
+      "unitPrice": 999.99
+    }
+  ]
+}
+
+# Expected: 201 Created — SAME order UUID as 1.1, NOT a new order
+# This proves the idempotency key is the authority, not the request body
+
+---
+
+### 1.4 Validation — missing items array (should return 400 Bad Request)
+POST {{baseUrl}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: test-key-validation-001
+X-Customer-Id: {{customerId}}
+
+{
+  "items": []
+}
+
+# Expected: 400 Bad Request
+# Body: { "message": "Order must have at least one item" }
+
+---
+
+### 1.5 Validation — negative unitPrice (should return 400 Bad Request)
+POST {{baseUrl}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: test-key-validation-002
+X-Customer-Id: {{customerId}}
+
+{
+  "items": [
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440001",
+      "name": "Invalid Item",
+      "quantity": 1,
+      "unitPrice": -5.00
+    }
+  ]
+}
+
+# Expected: 400 Bad Request
+
+---
+
+### 1.6 Create a second order for list/filter tests
+POST {{baseUrl}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: test-key-002
+X-Customer-Id: {{customerId}}
+
+{
+  "items": [
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440003",
+      "name": "Pepperoni Pizza",
+      "quantity": 1,
+      "unitPrice": 14.99
+    }
+  ]
+}
+
+# Expected: 201 Created — different UUID, status: PENDING
+
+###############################################################################
+# SECTION 2 — ORDER RETRIEVAL
+###############################################################################
+
+### 2.1 Get Order — correct customer (should return 200)
+# Replace ORDER_ID with UUID from 1.1
+GET {{baseUrl}}/api/v1/orders/ORDER_ID
+X-Customer-Id: {{customerId}}
+
+# Expected: 200 OK
+# Response: full order object with items array
+
+---
+
+### 2.2 Get Order — wrong customer (should return 403 Forbidden)
+GET {{baseUrl}}/api/v1/orders/ORDER_ID
+X-Customer-Id: {{wrongCustomerId}}
+
+# Expected: 403 Forbidden
+# Body: { "message": "Access denied" }
+
+---
+
+### 2.3 Get Order — order does not exist (should return 404)
+GET {{baseUrl}}/api/v1/orders/00000000-0000-0000-0000-000000000000
+X-Customer-Id: {{customerId}}
+
+# Expected: 404 Not Found
+# Body: { "message": "Order not found: 00000000-0000-0000-0000-000000000000" }
+
+---
+
+### 2.4 List Orders — by customerId, paginated
+GET {{baseUrl}}/api/v1/orders?customerId={{customerId}}&page=0&size=10
+X-Customer-Id: {{customerId}}
+
+# Expected: 200 OK
+# Response: Spring Page object with content[], totalElements, totalPages, number, size
+# Should include both orders created in 1.1 and 1.6
+
+---
+
+### 2.5 List Orders — filtered by status
+GET {{baseUrl}}/api/v1/orders?customerId={{customerId}}&status=PENDING&page=0&size=20
+X-Customer-Id: {{customerId}}
+
+# Expected: 200 OK — only PENDING orders in content[]
+
+---
+
+### 2.6 List Orders — no filters (all orders, paginated)
+GET {{baseUrl}}/api/v1/orders?page=0&size=5
+X-Customer-Id: {{customerId}}
+
+# Expected: 200 OK — first 5 orders across all customers
+
+###############################################################################
+# SECTION 3 — STATUS TRANSITIONS (happy path)
+# Run these in sequence using ORDER_ID from 1.1
+###############################################################################
+
+### 3.1 PENDING → CONFIRMED
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
 
 { "newStatus": "CONFIRMED" }
 
-### Try invalid transition (CONFIRMED → DELIVERED, skipping PREPARING)
-PATCH http://localhost:8080/api/v1/orders/ORDER_ID/status
+# Expected: 200 OK, status: "CONFIRMED"
+# Kafka log should show: "Order ORDER_ID transitioned PENDING -> CONFIRMED"
+# Consumer log should show: "[NOTIFICATION] ... PENDING -> CONFIRMED"
+
+---
+
+### 3.2 CONFIRMED → PREPARING
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID/status
 Content-Type: application/json
-X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "PREPARING" }
+
+# Expected: 200 OK, status: "PREPARING"
+
+---
+
+### 3.3 PREPARING → OUT_FOR_DELIVERY
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "OUT_FOR_DELIVERY" }
+
+# Expected: 200 OK, status: "OUT_FOR_DELIVERY"
+
+---
+
+### 3.4 OUT_FOR_DELIVERY → DELIVERED
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
 
 { "newStatus": "DELIVERED" }
 
-### Cancel order
-PATCH http://localhost:8080/api/v1/orders/ORDER_ID/status
+# Expected: 200 OK, status: "DELIVERED"
+
+###############################################################################
+# SECTION 4 — CANCELLATION FLOWS
+###############################################################################
+
+### 4.1 Cancel from PENDING (use second order from 1.6)
+# Replace ORDER_ID_2 with UUID from 1.6
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_2/status
 Content-Type: application/json
-X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+X-Customer-Id: {{customerId}}
 
 { "newStatus": "CANCELLED" }
 
-### Get order (correct customer)
-GET http://localhost:8080/api/v1/orders/ORDER_ID
-X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+# Expected: 200 OK, status: "CANCELLED"
 
-### Get order (wrong customer — expect 403)
-GET http://localhost:8080/api/v1/orders/ORDER_ID
-X-Customer-Id: 770e8400-e29b-41d4-a716-000000000000
+---
 
-### List orders with filters
-GET http://localhost:8080/api/v1/orders?customerId=550e8400-e29b-41d4-a716-446655440000&page=0&size=10
-X-Customer-Id: 550e8400-e29b-41d4-a716-446655440000
+### 4.2 Cancel a DELIVERED order (ambiguity decision — should return 422)
+# ORDER_ID from section 3 is now DELIVERED
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "CANCELLED" }
+
+# Expected: 422 Unprocessable Entity
+# Body: { "message": "Cannot transition from DELIVERED to CANCELLED" }
+# Design decision: DELIVERED is terminal — cancellation is rejected.
+
+---
+
+### 4.3 Cancel with wrong customer (should return 403)
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_2/status
+Content-Type: application/json
+X-Customer-Id: {{wrongCustomerId}}
+
+{ "newStatus": "CANCELLED" }
+
+# Expected: 403 Forbidden (even if ORDER_ID_2 is already CANCELLED — auth checked first)
+
+###############################################################################
+# SECTION 5 — INVALID TRANSITIONS
+###############################################################################
+
+### 5.1 PENDING → DELIVERED (skip all intermediate states)
+# Create a fresh order first, then try this immediately
+POST {{baseUrl}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: test-key-invalid-001
+X-Customer-Id: {{customerId}}
+
+{
+  "items": [
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440001",
+      "name": "Test Item",
+      "quantity": 1,
+      "unitPrice": 10.00
+    }
+  ]
+}
+
+---
+
+### 5.2 Invalid transition on fresh order (replace ORDER_ID_3 with UUID from 5.1)
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_3/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "DELIVERED" }
+
+# Expected: 422 Unprocessable Entity
+# Body: { "message": "Cannot transition from PENDING to DELIVERED" }
+
+---
+
+### 5.3 Backward transition — CONFIRMED → PENDING (invalid)
+# First confirm ORDER_ID_3:
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_3/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "CONFIRMED" }
+
+---
+
+### 5.4 Now try going backward: CONFIRMED → PENDING
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_3/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "PENDING" }
+
+# Expected: 422 Unprocessable Entity
+
+---
+
+### 5.5 DELIVERED → CONFIRMED (terminal state, no further transitions)
+# ORDER_ID from section 3 is DELIVERED
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "CONFIRMED" }
+
+# Expected: 422 Unprocessable Entity
+
+###############################################################################
+# SECTION 6 — STATUS IDEMPOTENCY (repeated identical transitions)
+###############################################################################
+
+### 6.1 Repeat CONFIRMED transition — should return 200, no duplicate Kafka event
+# ORDER_ID_3 is already CONFIRMED from 5.3
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_3/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "CONFIRMED" }
+
+# Expected: 200 OK — same state returned, no error
+# Kafka log: NO new event published (idempotent replay)
+# This simulates the internal service retrying the same transition up to 3x
+
+---
+
+### 6.2 Repeat again (second retry)
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_3/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "CONFIRMED" }
+
+# Expected: 200 OK — identical to 6.1
+# DB: version NOT incremented (no write occurred)
+
+###############################################################################
+# SECTION 7 — CONCURRENCY (optimistic locking demonstration)
+# These must be sent near-simultaneously to trigger a conflict.
+# Use a load testing tool (k6, hey) or two terminal tabs for reliable reproduction.
+###############################################################################
+
+### 7.1 Concurrent update A — PENDING → CONFIRMED
+# Send 7.1 and 7.2 simultaneously
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_2/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "CONFIRMED" }
+
+# Expected (one of these two):
+# — 200 OK (this request won the optimistic lock)
+# — 409 Conflict (this request lost: "Order was modified concurrently. Please retry.")
+
+---
+
+### 7.2 Concurrent update B — PENDING → CANCELLED (send simultaneously with 7.1)
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_2/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "CANCELLED" }
+
+# Expected (one of these two):
+# — 200 OK (this request won the optimistic lock)
+# — 409 Conflict
+
+# Note: Only ONE of 7.1/7.2 will succeed. The other gets 409 or 422 (if the
+# winner already applied a transition that makes the loser's target invalid).
+
+###############################################################################
+# SECTION 8 — FULL HAPPY PATH (end-to-end in sequence)
+# Clean test: create → confirm → prepare → dispatch → deliver
+###############################################################################
+
+### 8.1 Create fresh order
+POST {{baseUrl}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: test-key-e2e-001
+X-Customer-Id: {{customerId}}
+
+{
+  "items": [
+    {
+      "menuItemId": "660e8400-e29b-41d4-a716-446655440001",
+      "name": "Margherita Pizza",
+      "quantity": 1,
+      "unitPrice": 12.99
+    }
+  ]
+}
+
+# Step 1 done. Copy UUID to ORDER_ID_E2E below.
+
+---
+
+### 8.2 PENDING → CONFIRMED
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_E2E/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "CONFIRMED" }
+
+---
+
+### 8.3 CONFIRMED → PREPARING
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_E2E/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "PREPARING" }
+
+---
+
+### 8.4 PREPARING → OUT_FOR_DELIVERY
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_E2E/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "OUT_FOR_DELIVERY" }
+
+---
+
+### 8.5 OUT_FOR_DELIVERY → DELIVERED
+PATCH {{baseUrl}}/api/v1/orders/ORDER_ID_E2E/status
+Content-Type: application/json
+X-Customer-Id: {{customerId}}
+
+{ "newStatus": "DELIVERED" }
+
+---
+
+### 8.6 Verify final state
+GET {{baseUrl}}/api/v1/orders/ORDER_ID_E2E
+X-Customer-Id: {{customerId}}
+
+# Expected: status: "DELIVERED", all items present
+# Kafka logs should show 4 events: PENDING→CONFIRMED, CONFIRMED→PREPARING,
+# PREPARING→OUT_FOR_DELIVERY, OUT_FOR_DELIVERY→DELIVERED
